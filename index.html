@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Gerador de QR Pix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+/* Layout: formulário à esquerda, QR + copia-e-cola à direita; empilha no celular */
+:root {
+  --bg: #f3f5f2;
+  --surface: #ffffff;
+  --fg: #17201b;
+  --muted: #5c6b62;
+  --line: #d6ddd8;
+  --accent: #0f7a5a;
+  --accent-fg: #ffffff;
+  --warn: #a5491b;
+  --font-display: "Bricolage Grotesque", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111613; --surface: #1a211d; --fg: #e5ece7; --muted: #95a39a;
+    --line: #2d3832; --accent: #3fbf8f; --accent-fg: #08140f; --warn: #e88a5a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111613; --surface: #1a211d; --fg: #e5ece7; --muted: #95a39a;
+  --line: #2d3832; --accent: #3fbf8f; --accent-fg: #08140f; --warn: #e88a5a;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg); color: var(--fg); font-family: var(--font-body);
+  font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 48px;
+}
+.wrap { max-width: 920px; margin: 0 auto; display: grid; gap: 24px; }
+header { display: grid; gap: 4px; }
+h1 { font-family: var(--font-display); font-size: 1.9rem; line-height: 1.1; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+header p { margin: 0; color: var(--muted); max-width: 60ch; }
+.grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); gap: 24px; align-items: start; }
+@media (max-width: 720px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+form { display: grid; gap: 16px; }
+.field { display: grid; gap: 6px; min-width: 0; }
+.row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 460px) { .row { grid-template-columns: 1fr; } }
+label { font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+label .count { font-family: var(--font-mono); font-weight: 400; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+input, select {
+  font: inherit; color: var(--fg); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; width: 100%; min-width: 0;
+}
+input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.money { position: relative; }
+.money span { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); font-family: var(--font-mono); }
+.money input { padding-left: 40px; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.hint { font-size: 0.8rem; color: var(--muted); margin: 0; }
+.hint.err { color: var(--warn); }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  padding: 20px; display: grid; gap: 14px; justify-items: center;
+}
+#qr { background: #ffffff; padding: 12px; border-radius: 6px; line-height: 0; }
+#qr img, #qr canvas { display: block; width: 240px !important; height: 240px !important; max-width: 100%; }
+.amount { font-family: var(--font-display); font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+.who { color: var(--muted); font-size: 0.85rem; text-align: center; margin-top: -10px; overflow-wrap: anywhere; }
+.payload {
+  width: 100%; font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.45;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  padding: 10px; overflow-wrap: anywhere; user-select: all; max-height: 9.5em; overflow-y: auto;
+}
+button {
+  font: inherit; font-weight: 600; width: 100%; padding: 10px 14px; border-radius: 6px;
+  border: 0; background: var(--accent); color: var(--accent-fg); cursor: pointer;
+}
+button:hover { filter: brightness(1.08); }
+.tag { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--warn); }
+details { border-top: 1px solid var(--line); padding-top: 16px; }
+summary { cursor: pointer; font-weight: 600; }
+.tbl { overflow-x: auto; margin-top: 12px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; }
+td.mono { font-family: var(--font-mono); overflow-wrap: anywhere; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Gerador de QR Pix</h1>
+    <p>Preencha sua chave e o valor. O QR atualiza na hora e já sai com o valor embutido, pronto para escanear no app do Inter.</p>
+  </header>
+
+  <div class="grid">
+    <form id="f" autocomplete="off">
+      <div class="field">
+        <label for="tipo">Tipo de chave</label>
+        <select id="tipo">
+          <option value="email">E-mail</option>
+          <option value="cpf">CPF / CNPJ</option>
+          <option value="tel">Celular</option>
+          <option value="aleatoria">Chave aleatória</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="chave">Chave Pix <span class="count" id="cChave"></span></label>
+        <input id="chave" value="exemplo@email.com">
+        <p class="hint" id="hChave"></p>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="nome">Nome do recebedor <span class="count" id="cNome"></span></label>
+          <input id="nome" value="Fulano de Tal">
+        </div>
+        <div class="field">
+          <label for="cidade">Cidade <span class="count" id="cCidade"></span></label>
+          <input id="cidade" value="São Paulo">
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label for="valor">Valor</label>
+          <div class="money"><span>R$</span><input id="valor" inputmode="decimal" value="1,00"></div>
+        </div>
+        <div class="field">
+          <label for="txid">Identificador (opcional) <span class="count" id="cTxid"></span></label>
+          <input id="txid" placeholder="ex.: COMISSAOOUT26">
+        </div>
+      </div>
+      <p class="hint">Os campos vêm com valores de exemplo. Troque pela sua chave real e use um valor baixo, tipo R$ 1,00, para o primeiro teste.</p>
+
+      <details>
+        <summary>Ver o que vai dentro do código</summary>
+        <div class="tbl"><table>
+          <thead><tr><th>ID</th><th>Campo</th><th>Conteúdo</th></tr></thead>
+          <tbody id="parts"></tbody>
+        </table></div>
+      </details>
+    </form>
+
+    <div class="card" aria-live="polite">
+      <span class="tag" id="exTag">Dados de exemplo</span>
+      <div id="qr"></div>
+      <div class="amount" id="amt"></div>
+      <div class="who" id="who"></div>
+      <div class="payload" id="payload"></div>
+      <button type="button" id="copy">Copiar Pix copia e cola</button>
+      <p class="hint" id="copyMsg" hidden></p>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const EX = { chave: "exemplo@email.com", nome: "Fulano de Tal", cidade: "São Paulo" };
+
+const tlv = (id, v) => id + String(v.length).padStart(2, "0") + v;
+function crc16(s) {
+  let c = 0xFFFF;
+  for (const ch of s) {
+    c ^= ch.charCodeAt(0) << 8;
+    for (let i = 0; i < 8; i++) c = ((c & 0x8000) ? (c << 1) ^ 0x1021 : c << 1) & 0xFFFF;
+  }
+  return c.toString(16).toUpperCase().padStart(4, "0");
+}
+const ascii = t => t.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\x20-\x7E]/g, "");
+
+function normChave(tipo, raw) {
+  const v = raw.trim();
+  if (tipo === "cpf") return v.replace(/\D/g, "");
+  if (tipo === "email") return v.toLowerCase();
+  if (tipo === "tel") {
+    let d = v.replace(/\D/g, "");
+    if (!d.startsWith("55")) d = "55" + d;
+    return "+" + d;
+  }
+  return v.toLowerCase();
+}
+function checkChave(tipo, k) {
+  if (!k) return "Informe a chave.";
+  if (tipo === "cpf" && !(k.length === 11 || k.length === 14)) return "CPF tem 11 dígitos, CNPJ tem 14.";
+  if (tipo === "email" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(k)) return "E-mail parece incompleto.";
+  if (tipo === "tel" && !/^\+55\d{10,11}$/.test(k)) return "Use DDD + número, ex.: 11 99999-9999.";
+  if (tipo === "aleatoria" && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(k)) return "Chave aleatória tem o formato xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.";
+  return "";
+}
+function parseValor(s) {
+  const n = Number(String(s).trim().replace(/\./g, "").replace(",", "."));
+  return isFinite(n) && n > 0 ? Math.round(n * 100) / 100 : null;
+}
+
+function build() {
+  const tipo = $("tipo").value;
+  const chave = normChave(tipo, $("chave").value);
+  const nome = ascii($("nome").value).toUpperCase().trim().slice(0, 25) || "RECEBEDOR";
+  const cidade = ascii($("cidade").value).toUpperCase().trim().slice(0, 15) || "BRASIL";
+  const txid = ascii($("txid").value).replace(/[^A-Za-z0-9]/g, "").slice(0, 25) || "***";
+  const valor = parseValor($("valor").value);
+
+  const parts = [
+    ["00", "Formato", "01"],
+    ["26", "Conta Pix", tlv("00", "br.gov.bcb.pix") + tlv("01", chave)],
+    ["52", "Categoria", "0000"],
+    ["53", "Moeda (986 = BRL)", "986"],
+  ];
+  if (valor) parts.push(["54", "Valor", valor.toFixed(2)]);
+  parts.push(["58", "País", "BR"], ["59", "Nome", nome], ["60", "Cidade", cidade], ["62", "Identificador", tlv("05", txid)]);
+
+  let p = parts.map(([id, , v]) => tlv(id, v)).join("") + "6304";
+  const crc = crc16(p);
+  p += crc;
+  parts.push(["63", "CRC16", crc]);
+  return { p, parts, chave, nome, valor, tipo, txidLen: txid === "***" ? 0 : txid.length };
+}
+
+let qr = null;
+function render() {
+  const r = build();
+  const err = checkChave(r.tipo, r.chave);
+  $("hChave").textContent = err || "Vai no código como: " + r.chave;
+  $("hChave").className = "hint" + (err ? " err" : "");
+  $("cChave").textContent = r.chave.length + "/77";
+  $("cNome").textContent = Math.min(ascii($("nome").value).trim().length, 99) + "/25";
+  $("cCidade").textContent = ascii($("cidade").value).trim().length + "/15";
+  $("cTxid").textContent = r.txidLen + "/25";
+
+  $("amt").textContent = r.valor ? r.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "Sem valor";
+  $("who").textContent = r.nome + " · " + r.chave;
+  $("payload").textContent = r.p;
+  $("exTag").hidden = !($("chave").value.trim() === EX.chave);
+
+  $("parts").innerHTML = r.parts.map(([id, n, v]) =>
+    `<tr><td class="mono">${id}</td><td>${n}</td><td class="mono">${v.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</td></tr>`).join("");
+
+  const box = $("qr");
+  if (typeof QRCode === "undefined") { box.textContent = "Não foi possível carregar o gerador de QR."; return; }
+  box.innerHTML = "";
+  qr = new QRCode(box, { text: r.p, width: 480, height: 480, colorDark: "#000000", colorLight: "#ffffff", correctLevel: QRCode.CorrectLevel.M });
+}
+
+["tipo", "chave", "nome", "cidade", "valor", "txid"].forEach(id => $(id).addEventListener("input", render));
+$("tipo").addEventListener("change", render);
+$("f").addEventListener("submit", e => e.preventDefault());
+
+$("copy").addEventListener("click", () => {
+  const text = $("payload").textContent;
+  const msg = $("copyMsg");
+  const ok = () => { msg.hidden = false; msg.className = "hint"; msg.textContent = "Copiado. Cole em Pix > Copia e cola no app do banco."; };
+  const fallback = () => {
+    const range = document.createRange(); range.selectNodeContents($("payload"));
+    const sel = getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    msg.hidden = false; msg.className = "hint"; msg.textContent = "Texto selecionado. Use Ctrl+C para copiar.";
+  };
+  try { navigator.clipboard.writeText(text).then(ok, fallback); } catch (e) { fallback(); }
+});
+
+render();
+</script>
+</body>
+</html>
