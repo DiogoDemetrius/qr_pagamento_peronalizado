@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Funcionários · Comissões Pix</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600&display=swap">
+<link rel="stylesheet" href="/css/app.css">
+<script src="/js/app.js"></script>
+</head>
+<body>
+<main>
+  <div class="cabecalho">
+    <div>
+      <h1>Funcionários</h1>
+      <p>Quem recebe comissão, a chave Pix e como o valor é definido: fixo no cadastro ou variável por competência.</p>
+    </div>
+    <button type="button" id="novo">Novo funcionário</button>
+  </div>
+
+  <div class="filtros">
+    <div class="campo busca">
+      <label for="busca">Buscar</label>
+      <input id="busca" type="search" placeholder="Nome, chave, CPF ou referência">
+    </div>
+    <div class="campo">
+      <label for="fAtivo">Situação</label>
+      <select id="fAtivo">
+        <option value="true">Ativos</option>
+        <option value="false">Inativos</option>
+        <option value="">Todos</option>
+      </select>
+    </div>
+    <div class="campo">
+      <label for="fModo">Comissão</label>
+      <select id="fModo">
+        <option value="">Fixa e variável</option>
+        <option value="fixa">Fixa</option>
+        <option value="variavel">Variável</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="tabela">
+    <table>
+      <thead><tr><th>Nome</th><th>Chave Pix</th><th>Comissão</th><th>Ref. externa</th><th>Situação</th><th></th></tr></thead>
+      <tbody id="linhas"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="paginacao"><span id="contagem"></span></div>
+</main>
+
+<dialog id="dlg">
+  <form id="form" novalidate>
+    <h2 id="dlgTitulo">Novo funcionário</h2>
+    <div class="grade-form">
+      <div class="campo inteira">
+        <label for="nome">Nome completo</label>
+        <input id="nome" name="nome" maxlength="120" required>
+        <span class="erro" data-erro="nome"></span>
+      </div>
+      <div class="campo">
+        <label for="tipo_chave">Tipo de chave Pix</label>
+        <select id="tipo_chave" name="tipo_chave">
+          <option value="cpf">CPF</option>
+          <option value="cnpj">CNPJ</option>
+          <option value="email">E-mail</option>
+          <option value="telefone">Celular</option>
+          <option value="aleatoria">Chave aleatória</option>
+        </select>
+        <span class="erro" data-erro="tipo_chave"></span>
+      </div>
+      <div class="campo">
+        <label for="chave_pix">Chave Pix</label>
+        <input id="chave_pix" name="chave_pix" maxlength="77" required>
+        <span class="erro" data-erro="chave_pix"></span>
+      </div>
+      <div class="campo">
+        <label for="modo_comissao">Comissão</label>
+        <select id="modo_comissao" name="modo_comissao">
+          <option value="fixa">Fixa (valor do cadastro)</option>
+          <option value="variavel">Variável (lançada por competência)</option>
+        </select>
+      </div>
+      <div class="campo" id="campoValor">
+        <label for="valor_fixo">Valor fixo (R$)</label>
+        <input id="valor_fixo" name="valor_fixo" inputmode="decimal" placeholder="0,00">
+        <span class="erro" data-erro="valor_fixo"></span>
+      </div>
+      <div class="campo">
+        <label for="documento">CPF/CNPJ (opcional)</label>
+        <input id="documento" name="documento" inputmode="numeric">
+        <span class="erro" data-erro="documento"></span>
+      </div>
+      <div class="campo">
+        <label for="cidade">Cidade (opcional)</label>
+        <input id="cidade" name="cidade" maxlength="60">
+      </div>
+      <div class="campo">
+        <label for="email">E-mail (opcional)</label>
+        <input id="email" name="email" type="email">
+        <span class="erro" data-erro="email"></span>
+      </div>
+      <div class="campo">
+        <label for="ref_externa">Ref. em outro sistema (opcional)</label>
+        <input id="ref_externa" name="ref_externa" maxlength="64" placeholder="ex.: código do vendedor">
+      </div>
+      <div class="campo inteira">
+        <label for="observacao">Observação</label>
+        <textarea id="observacao" name="observacao"></textarea>
+      </div>
+      <label class="inteira" style="display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0;font-size:.9rem;color:var(--fg);font-weight:500">
+        <input type="checkbox" id="ativo" name="ativo" checked> Ativo (entra nos lotes de pagamento)
+      </label>
+    </div>
+    <div class="rodape">
+      <button type="button" class="secundario" id="fechar">Cancelar</button>
+      <button type="submit" id="salvar">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const { api, brl, esc, toast, erro, confirmar, pill } = App;
+const TIPOS = { cpf: 'CPF', cnpj: 'CNPJ', email: 'E-mail', telefone: 'Celular', aleatoria: 'Aleatória' };
+let editando = null;
+let timerBusca;
+
+async function carregar() {
+  const p = new URLSearchParams({ limite: 1000 });
+  if (busca.value.trim()) p.set('busca', busca.value.trim());
+  if (fAtivo.value) p.set('ativo', fAtivo.value);
+  if (fModo.value) p.set('modo', fModo.value);
+  try {
+    const { total, itens } = await api(`/api/funcionarios?${p}`);
+    contagem.textContent = `${total} funcionário${total === 1 ? '' : 's'}`;
+    linhas.innerHTML = itens.length ? itens.map((f) => `
+      <tr>
+        <td><strong>${esc(f.nome)}</strong>${f.documento ? `<div class="muted mono">${esc(f.documento)}</div>` : ''}</td>
+        <td><span class="tag">${TIPOS[f.tipo_chave] || esc(f.tipo_chave)}</span> <span class="mono">${esc(f.chave_pix)}</span></td>
+        <td>${f.modo_comissao === 'fixa' ? `<span class="num">${brl(f.valor_fixo)}</span> <span class="tag">Fixa</span>` : '<span class="tag">Variável</span>'}</td>
+        <td class="mono">${esc(f.ref_externa || '')}</td>
+        <td>${f.ativo ? pill('ativo', 'Ativo') : pill('inativo', 'Inativo')}</td>
+        <td class="acoes-linha">
+          <button type="button" class="link" data-editar="${f.id}">Editar</button>
+          ${f.ativo ? `<button type="button" class="link perigo" data-remover="${f.id}" data-nome="${esc(f.nome)}">Remover</button>` : ''}
+        </td>
+      </tr>`).join('') : '<tr><td colspan="6" class="vazio">Nenhum funcionário encontrado. Use "Novo funcionário" para cadastrar o primeiro.</td></tr>';
+  } catch (e) { erro(e); }
+}
+
+function limparErros() { form.querySelectorAll('[data-erro]').forEach((el) => (el.textContent = '')); }
+function atualizarModo() { campoValor.hidden = modo_comissao.value !== 'fixa'; }
+
+function abrir(f) {
+  editando = f?.id || null;
+  dlgTitulo.textContent = f ? 'Editar funcionário' : 'Novo funcionário';
+  form.reset();
+  limparErros();
+  for (const campo of ['nome', 'tipo_chave', 'chave_pix', 'modo_comissao', 'documento', 'cidade', 'email', 'ref_externa', 'observacao']) {
+    form.elements[campo].value = f?.[campo] ?? form.elements[campo].value;
+  }
+  valor_fixo.value = f?.valor_fixo ? String(f.valor_fixo).replace('.', ',') : '';
+  ativo.checked = f ? f.ativo : true;
+  atualizarModo();
+  dlg.showModal();
+  nome.focus();
+}
+
+novo.addEventListener('click', () => abrir(null));
+fechar.addEventListener('click', () => dlg.close());
+modo_comissao.addEventListener('change', atualizarModo);
+
+form.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  limparErros();
+  const dados = Object.fromEntries(new FormData(form));
+  dados.ativo = ativo.checked;
+  salvar.disabled = true;
+  try {
+    await api(editando ? `/api/funcionarios/${editando}` : '/api/funcionarios', { method: editando ? 'PUT' : 'POST', json: dados });
+    dlg.close();
+    toast(editando ? 'Funcionário atualizado.' : 'Funcionário cadastrado.');
+    carregar();
+  } catch (e) {
+    if (e.detalhes) for (const [k, msg] of Object.entries(e.detalhes)) {
+      const el = form.querySelector(`[data-erro="${k}"]`);
+      if (el) el.textContent = msg;
+    }
+    erro(e);
+  } finally { salvar.disabled = false; }
+});
+
+linhas.addEventListener('click', async (ev) => {
+  const ed = ev.target.closest('[data-editar]');
+  const rm = ev.target.closest('[data-remover]');
+  try {
+    if (ed) abrir(await api(`/api/funcionarios/${ed.dataset.editar}`));
+    if (rm) {
+      if (!(await confirmar(`Remover ${rm.dataset.nome}? Se já tiver pagamentos, o cadastro fica inativo e o histórico é mantido.`, 'Remover', true))) return;
+      const r = await api(`/api/funcionarios/${rm.dataset.remover}`, { method: 'DELETE' });
+      toast(r.desativado ? 'Funcionário desativado (tem histórico de pagamentos).' : 'Funcionário excluído.');
+      carregar();
+    }
+  } catch (e) { erro(e); }
+});
+
+busca.addEventListener('input', () => { clearTimeout(timerBusca); timerBusca = setTimeout(carregar, 250); });
+fAtivo.addEventListener('change', carregar);
+fModo.addEventListener('change', carregar);
+document.addEventListener('DOMContentLoaded', carregar);
+</script>
+</body>
+</html>

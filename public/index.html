@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Painel · Comissões Pix</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600&display=swap">
+<link rel="stylesheet" href="/css/app.css">
+<script src="/js/app.js"></script>
+</head>
+<body>
+<main>
+  <div class="cabecalho">
+    <div>
+      <h1 id="titulo">Painel</h1>
+      <p>Acompanhe o que já foi pago, o que está pendente e o que ainda falta gerar na competência.</p>
+    </div>
+    <div class="campo">
+      <label for="competencia">Competência</label>
+      <input type="month" id="competencia">
+    </div>
+  </div>
+
+  <section class="kpis" aria-label="Resumo da competência">
+    <div class="kpi">
+      <span class="rotulo">Previsto</span>
+      <span class="valor" id="kPrevisto">–</span>
+      <span class="sub" id="kPrevistoSub"></span>
+    </div>
+    <div class="kpi">
+      <span class="rotulo">Pago</span>
+      <span class="valor" id="kPago">–</span>
+      <div class="progresso" aria-hidden="true"><span id="kBarra" style="width:0"></span></div>
+      <span class="sub" id="kPagoSub"></span>
+    </div>
+    <div class="kpi">
+      <span class="rotulo">Pendente</span>
+      <span class="valor" id="kPendente">–</span>
+      <span class="sub" id="kPendenteSub"></span>
+    </div>
+    <div class="kpi">
+      <span class="rotulo">Funcionários ativos</span>
+      <span class="valor" id="kAtivos">–</span>
+      <span class="sub" id="kAtivosSub"></span>
+    </div>
+  </section>
+
+  <section aria-labelledby="tPend" style="display:grid;gap:12px">
+    <h2 id="tPend">Pendências</h2>
+    <div class="colunas">
+      <div class="bloco alerta" id="bProntos">
+        <div class="bloco-topo">
+          <h3>Prontos para gerar QR</h3>
+          <span class="contador" id="nProntos">0</span>
+        </div>
+        <ul class="lista" id="lProntos"></ul>
+        <div class="acoes"><button type="button" id="gerarLote">Gerar QR de todos</button></div>
+      </div>
+      <div class="bloco alerta" id="bSemValor">
+        <div class="bloco-topo">
+          <h3>Sem comissão lançada</h3>
+          <span class="contador" id="nSemValor">0</span>
+        </div>
+        <ul class="lista" id="lSemValor"></ul>
+        <div class="acoes"><a class="botao secundario" id="linkComissoes" href="/comissoes">Lançar comissões</a></div>
+      </div>
+      <div class="bloco alerta critico" id="bAtrasados">
+        <div class="bloco-topo">
+          <h3 id="tAtrasados">Pendentes há mais tempo</h3>
+          <span class="contador" id="nAtrasados">0</span>
+        </div>
+        <ul class="lista" id="lAtrasados"></ul>
+        <div class="acoes"><a class="botao secundario" href="/pagamentos?status=pendente">Ver pendentes</a></div>
+      </div>
+      <div class="bloco alerta" id="bExtrato">
+        <div class="bloco-topo">
+          <h3>Saídas do extrato sem correspondência</h3>
+          <span class="contador" id="nExtrato">0</span>
+        </div>
+        <ul class="lista" id="lExtrato"></ul>
+        <div class="acoes"><a class="botao secundario" href="/conciliacao">Conciliar</a></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="colunas">
+    <div class="bloco">
+      <div class="bloco-topo">
+        <h2>Pagamentos confirmados</h2>
+        <span class="muted" style="font-size:.85rem">últimos 30 dias</span>
+      </div>
+      <div class="grafico" id="gDias"></div>
+    </div>
+    <div class="bloco">
+      <div class="bloco-topo">
+        <h2>Por competência</h2>
+        <div class="legenda">
+          <span><i style="background:var(--line)"></i>Previsto</span>
+          <span><i style="background:var(--accent)"></i>Pago</span>
+        </div>
+      </div>
+      <div class="grafico" id="gComp"></div>
+    </div>
+  </section>
+
+  <section class="bloco">
+    <div class="bloco-topo">
+      <h2>Últimos pagamentos confirmados</h2>
+      <a href="/pagamentos?status=pago">Ver todos</a>
+    </div>
+    <div class="tabela">
+      <table>
+        <thead><tr><th>Recebedor</th><th>Competência</th><th class="valor">Valor</th><th>Pago em</th><th>Confirmação</th></tr></thead>
+        <tbody id="tUltimos"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const { api, brl, esc, data, dataHora, competenciaNome, rotulo, toast, erro, confirmar } = App;
+let competencia;
+
+function lista(el, itens, render, vazio) {
+  el.innerHTML = itens.length ? itens.slice(0, 6).map(render).join('') +
+    (itens.length > 6 ? `<li class="muted">e mais ${itens.length - 6}</li>` : '') : `<li class="muted">${vazio}</li>`;
+}
+
+function graficoDias(el, dias) {
+  const W = 560, H = 180, base = H - 22, topo = 10, esq = 84;
+  const max = Math.max(...dias.map((d) => d.valor), 1);
+  const passo = (W - esq) / dias.length;
+  const largura = Math.max(passo - 3, 2);
+  const marcas = [0, max / 2, max];
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Valor pago por dia nos últimos 30 dias">
+    ${marcas.map((m) => { const y = base - (m / max) * (base - topo); return `<line class="grade" x1="${esq}" x2="${W}" y1="${y}" y2="${y}"/><text x="${esq - 8}" y="${y + 4}" text-anchor="end">${esc(brl(m))}</text>`; }).join('')}
+    ${dias.map((d, i) => {
+      const h = (d.valor / max) * (base - topo);
+      return `<rect class="barra" x="${esq + i * passo + 1.5}" y="${base - h}" width="${largura}" height="${Math.max(h, d.valor ? 2 : 0)}" rx="2"><title>${data(d.dia)}: ${brl(d.valor)} (${d.qtd})</title></rect>`;
+    }).join('')}
+    <text x="${esq}" y="${H - 4}">${data(dias[0]?.dia)}</text>
+    <text x="${W}" y="${H - 4}" text-anchor="end">${data(dias[dias.length - 1]?.dia)}</text>
+  </svg>`;
+}
+
+function graficoCompetencias(el, comps) {
+  if (!comps.length) { el.innerHTML = '<p class="vazio">Nenhum pagamento gerado nos últimos meses.</p>'; return; }
+  const W = 560, linha = 34, H = comps.length * linha + 6, rotuloL = 92, direita = 110;
+  const max = Math.max(...comps.map((c) => c.previsto), 1);
+  const larg = W - rotuloL - direita;
+  el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Previsto e pago por competência">
+    ${comps.map((c, i) => {
+      const y = i * linha + 6;
+      const wp = (c.previsto / max) * larg, wg = (c.pago / max) * larg;
+      const [a, m] = c.competencia.split('-');
+      return `<text x="0" y="${y + 15}">${m}/${a}</text>
+        <rect class="barra-previsto" x="${rotuloL}" y="${y + 4}" width="${wp}" height="16" rx="3"/>
+        <rect class="barra" x="${rotuloL}" y="${y + 4}" width="${wg}" height="16" rx="3"><title>${brl(c.pago)} de ${brl(c.previsto)}</title></rect>
+        <text x="${W}" y="${y + 16}" text-anchor="end">${esc(brl(c.pago))}</text>`;
+    }).join('')}
+  </svg>`;
+}
+
+async function carregar() {
+  try {
+    const d = await api(`/api/painel?competencia=${competencia}`);
+    const r = d.resumo;
+    document.getElementById('titulo').textContent = `Painel · ${competenciaNome(competencia)}`;
+    kPrevisto.textContent = brl(r.previsto);
+    kPrevistoSub.textContent = `${r.pendente.qtd + r.pago.qtd} QR gerados`;
+    kPago.textContent = brl(r.pago.valor);
+    kBarra.style.width = `${Math.round(r.percentual_pago * 100)}%`;
+    kPagoSub.textContent = `${r.pago.qtd} pagos · ${Math.round(r.percentual_pago * 100)}% do previsto`;
+    kPendente.textContent = brl(r.pendente.valor);
+    kPendenteSub.textContent = `${r.pendente.qtd} aguardando pagamento`;
+    kAtivos.textContent = d.funcionarios_ativos;
+    const faltam = d.pendencias.prontos_para_gerar.length + d.pendencias.sem_valor.length;
+    kAtivosSub.textContent = faltam ? `${faltam} sem QR nesta competência` : 'Todos com QR gerado';
+
+    const p = d.pendencias;
+    nProntos.textContent = p.prontos_para_gerar.length;
+    lista(lProntos, p.prontos_para_gerar, (f) => `<li><span class="nome">${esc(f.nome)}</span><span class="num">${brl(f.valor)}</span></li>`, 'Ninguém aguardando geração.');
+    gerarLote.disabled = !p.prontos_para_gerar.length;
+
+    nSemValor.textContent = p.sem_valor.length;
+    lista(lSemValor, p.sem_valor, (f) => `<li><span class="nome">${esc(f.nome)}</span><span class="tag">Variável</span></li>`, 'Todos os variáveis têm valor lançado.');
+    linkComissoes.href = `/comissoes?competencia=${competencia}`;
+
+    tAtrasados.textContent = `Pendentes há mais de ${p.dias_alerta} dias`;
+    nAtrasados.textContent = p.atrasados.length;
+    lista(lAtrasados, p.atrasados, (a) => `<li><span class="nome">${esc(a.nome_recebedor)} <span class="muted">· ${a.dias} dias</span></span><span class="num">${brl(a.valor)}</span></li>`, 'Nenhum pagamento atrasado.');
+
+    const ex = p.extrato_sem_correspondencia;
+    nExtrato.textContent = ex.qtd;
+    lista(lExtrato, ex.itens, (t) => `<li><span class="nome">${data(t.data)} · ${esc(t.nome_destino || t.descricao || 'Sem descrição')}</span><span class="num">${brl(t.valor)}</span></li>`, 'Todas as saídas importadas foram conciliadas.');
+
+    for (const [bloco, n] of [[bProntos, p.prontos_para_gerar.length], [bSemValor, p.sem_valor.length], [bAtrasados, p.atrasados.length], [bExtrato, ex.qtd]]) {
+      bloco.classList.toggle('alerta', n > 0);
+    }
+
+    graficoDias(gDias, d.pagos_por_dia);
+    graficoCompetencias(gComp, d.por_competencia);
+
+    tUltimos.innerHTML = d.ultimos_pagos.length
+      ? d.ultimos_pagos.map((u) => `<tr><td>${esc(u.nome_recebedor)}</td><td>${esc(u.competencia)}</td><td class="valor">${brl(u.valor)}</td><td>${dataHora(u.pago_em)}</td><td><span class="tag">${esc(rotulo(u.confirmacao))}</span></td></tr>`).join('')
+      : '<tr><td colspan="5" class="vazio">Nenhum pagamento confirmado ainda.</td></tr>';
+  } catch (e) { erro(e); }
+}
+
+gerarLote.addEventListener('click', async () => {
+  if (!(await confirmar(`Gerar os QR Codes de ${competenciaNome(competencia)} para todos os prontos?`, 'Gerar QR'))) return;
+  try {
+    const r = await api('/api/pagamentos/gerar-lote', { json: { competencia } });
+    toast(`${r.criados} QR gerados (${brl(r.total)}).`);
+    carregar();
+  } catch (e) { erro(e); }
+});
+
+document.addEventListener('DOMContentLoaded', async () => {
+  competencia = await App.campoCompetencia(document.getElementById('competencia'), (c) => { competencia = c; carregar(); });
+  carregar();
+});
+</script>
+</body>
+</html>

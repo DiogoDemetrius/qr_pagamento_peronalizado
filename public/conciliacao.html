@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Conciliação · Comissões Pix</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600&display=swap">
+<link rel="stylesheet" href="/css/app.css">
+<script src="/js/app.js"></script>
+</head>
+<body>
+<main>
+  <div class="cabecalho">
+    <div>
+      <h1>Conciliação</h1>
+      <p>Traga as saídas da conta que paga as comissões. Cada Pix encontrado no extrato confirma o pagamento pendente correspondente, pelo identificador, pela chave, pelo nome ou pelo valor.</p>
+    </div>
+    <button type="button" class="secundario" id="reprocessar">Conciliar de novo</button>
+  </div>
+
+  <section class="colunas">
+    <form class="bloco" id="fArquivo">
+      <h2>Importar extrato</h2>
+      <p class="muted" style="margin:0;font-size:.9rem">Arquivo OFX ou CSV exportado do internet banking. Lançamentos repetidos são ignorados, então pode importar períodos que se sobrepõem.</p>
+      <div class="acoes">
+        <input type="file" id="arquivo" accept=".ofx,.csv,.txt" required>
+        <button type="submit">Importar</button>
+      </div>
+    </form>
+
+    <form class="bloco" id="fApi">
+      <div class="bloco-topo">
+        <h2>Buscar pela API do banco</h2>
+        <span id="apiStatus"></span>
+      </div>
+      <div class="grade-form">
+        <div class="campo">
+          <label for="dIni">De</label>
+          <input type="date" id="dIni" required>
+        </div>
+        <div class="campo">
+          <label for="dFim">Até</label>
+          <input type="date" id="dFim" required>
+        </div>
+      </div>
+      <div class="acoes"><button type="submit" id="btnApi">Buscar saídas Pix</button></div>
+    </form>
+  </section>
+
+  <div class="resultado" id="resultado" hidden></div>
+
+  <section class="bloco">
+    <div class="bloco-topo">
+      <h2>Saídas do extrato</h2>
+      <div class="campo" style="min-width:200px">
+        <label for="fSituacao">Situação</label>
+        <select id="fSituacao">
+          <option value="sem_correspondencia">Sem correspondência</option>
+          <option value="conciliada">Conciliadas</option>
+          <option value="ignorada">Ignoradas</option>
+          <option value="">Todas</option>
+        </select>
+      </div>
+    </div>
+    <div class="tabela">
+      <table>
+        <thead><tr><th>Data</th><th>Descrição</th><th class="valor">Valor</th><th>Situação</th><th>Pagamento</th><th></th></tr></thead>
+        <tbody id="linhas"></tbody>
+      </table>
+    </div>
+    <div class="paginacao"><span id="contagem"></span></div>
+  </section>
+
+  <section class="bloco">
+    <h2>Importações</h2>
+    <div class="tabela">
+      <table>
+        <thead><tr><th>Quando</th><th>Origem</th><th>Período</th><th class="valor">Lidas</th><th class="valor">Novas</th><th class="valor">Conciliadas</th></tr></thead>
+        <tbody id="importacoes"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const { api, brl, esc, data, dataHora, rotulo, pill, toast, erro, mostrarResultado } = App;
+
+async function carregar() {
+  const p = new URLSearchParams({ limite: 300 });
+  if (fSituacao.value) p.set('situacao', fSituacao.value);
+  try {
+    const [d, imps] = await Promise.all([api(`/api/conciliacao/transacoes?${p}`), api('/api/conciliacao/importacoes')]);
+    contagem.textContent = `${d.total} saída${d.total === 1 ? '' : 's'}`;
+    linhas.innerHTML = d.itens.length ? d.itens.map((t) => {
+      let pagamento = '';
+      let acoes = '';
+      if (t.situacao === 'conciliada') {
+        pagamento = `${esc(t.pagamento_nome || '')} <span class="muted">${esc(t.pagamento_competencia || '')}</span>`;
+      } else if (t.situacao === 'sem_correspondencia') {
+        pagamento = t.sugestoes?.length
+          ? `<select data-sel="${t.id}" aria-label="Pagamento correspondente"><option value="">Vincular a…</option>${t.sugestoes.map((s) => `<option value="${s.id}">${esc(s.nome_recebedor)} · ${esc(s.competencia)}</option>`).join('')}</select>`
+          : '<span class="muted">Nenhum pendente com este valor</span>';
+        acoes = `${t.sugestoes?.length ? `<button type="button" class="link" data-vincular="${t.id}">Vincular</button>` : ''}
+          <button type="button" class="link" data-ignorar="${t.id}" title="Saída que não é comissão">Ignorar</button>`;
+      } else {
+        acoes = `<button type="button" class="link" data-restaurar="${t.id}">Restaurar</button>`;
+      }
+      return `<tr>
+        <td>${data(t.data)}</td>
+        <td style="min-width:220px"><div style="overflow-wrap:anywhere">${esc(t.descricao || '')}</div><span class="tag">${esc(rotulo(t.fonte))}</span></td>
+        <td class="valor">${brl(t.valor)}</td>
+        <td>${pill(t.situacao)}</td>
+        <td>${pagamento}</td>
+        <td class="acoes-linha">${acoes}</td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="6" class="vazio">Nada por aqui. Importe um extrato para começar.</td></tr>';
+
+    importacoes.innerHTML = imps.length ? imps.map((i) => `<tr>
+      <td>${dataHora(i.created_at)}</td>
+      <td><span class="tag">${esc(i.fonte.toUpperCase())}</span> <span class="muted">${esc(i.arquivo || '')}</span></td>
+      <td>${i.periodo_inicio ? `${data(i.periodo_inicio)} a ${data(i.periodo_fim)}` : ''}</td>
+      <td class="valor">${i.total}</td><td class="valor">${i.novas}</td><td class="valor">${i.conciliadas}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="vazio">Nenhuma importação ainda.</td></tr>';
+  } catch (e) { erro(e); }
+}
+
+function mostrarImportacao(r, titulo) {
+  const linhasRes = [
+    `${r.lidas} saída${r.lidas === 1 ? '' : 's'} lida${r.lidas === 1 ? '' : 's'}, ${r.novas} nova${r.novas === 1 ? '' : 's'} (${r.repetidas} já importada${r.repetidas === 1 ? '' : 's'} antes)`,
+    `<strong>${r.conciliadas.length} pagamento${r.conciliadas.length === 1 ? '' : 's'} confirmado${r.conciliadas.length === 1 ? '' : 's'}</strong>`,
+    ...r.conciliadas.slice(0, 20).map((c) => `${esc(c.nome)}: ${brl(c.valor)} <span class="muted">(por ${esc(c.motivo)})</span>`),
+    `${r.sem_correspondencia} sem correspondência nesta importação`,
+  ];
+  mostrarResultado(resultado, titulo, linhasRes);
+}
+
+fArquivo.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const f = arquivo.files[0];
+  if (!f) return;
+  const fd = new FormData();
+  fd.append('arquivo', f);
+  try {
+    const r = await api('/api/conciliacao/extrato', { method: 'POST', body: fd });
+    mostrarImportacao(r, `Extrato ${f.name}`);
+    fArquivo.reset();
+    carregar();
+  } catch (e) { erro(e); }
+});
+
+fApi.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  btnApi.disabled = true;
+  try {
+    const r = await api('/api/conciliacao/api-banco', { json: { data_inicio: dIni.value, data_fim: dFim.value } });
+    mostrarImportacao(r, 'API do banco');
+    carregar();
+  } catch (e) { erro(e); } finally { btnApi.disabled = !window.apiConfigurada; }
+});
+
+reprocessar.addEventListener('click', async () => {
+  try {
+    const r = await api('/api/conciliacao/reprocessar', { json: {} });
+    toast(`${r.conciliadas.length} pagamento${r.conciliadas.length === 1 ? '' : 's'} confirmado${r.conciliadas.length === 1 ? '' : 's'}.`);
+    carregar();
+  } catch (e) { erro(e); }
+});
+
+linhas.addEventListener('click', async (ev) => {
+  const v = ev.target.closest('[data-vincular]');
+  const ig = ev.target.closest('[data-ignorar]');
+  const rs = ev.target.closest('[data-restaurar]');
+  try {
+    if (v) {
+      const sel = linhas.querySelector(`[data-sel="${v.dataset.vincular}"]`);
+      if (!sel?.value) return toast('Escolha o pagamento na lista.', 'erro');
+      await api(`/api/conciliacao/transacoes/${v.dataset.vincular}/vincular`, { json: { pagamento_id: Number(sel.value) } });
+      toast('Pagamento confirmado.');
+    }
+    if (ig) { await api(`/api/conciliacao/transacoes/${ig.dataset.ignorar}/ignorar`, { json: {} }); toast('Saída ignorada.'); }
+    if (rs) { await api(`/api/conciliacao/transacoes/${rs.dataset.restaurar}/restaurar`, { json: {} }); toast('Saída voltou para sem correspondência.'); }
+    if (v || ig || rs) carregar();
+  } catch (e) { erro(e); }
+});
+
+fSituacao.addEventListener('change', carregar);
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const hoje = new Date();
+  const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+  const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  dIni.value = iso(ini);
+  dFim.value = iso(hoje);
+  try {
+    const cfg = await App.config();
+    window.apiConfigurada = cfg.api_banco_configurada;
+    btnApi.disabled = !cfg.api_banco_configurada;
+    apiStatus.innerHTML = cfg.api_banco_configurada ? pill('ativo', 'Configurada') : pill('inativo', 'Não configurada');
+  } catch (e) { erro(e); }
+  carregar();
+});
+</script>
+</body>
+</html>

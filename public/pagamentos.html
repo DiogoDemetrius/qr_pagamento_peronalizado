@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pagamentos · Comissões Pix</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600&display=swap">
+<link rel="stylesheet" href="/css/app.css">
+<script src="/js/app.js"></script>
+</head>
+<body>
+<main>
+  <div class="cabecalho">
+    <div>
+      <h1>Pagamentos</h1>
+      <p>Cada linha é um Pix com QR Code. Gere o lote da competência, escaneie no app do banco e confirme o pagamento.</p>
+    </div>
+    <div class="acoes">
+      <button type="button" class="secundario" id="btnLote">Gerar lote</button>
+      <button type="button" id="btnSequencia">Pagar em sequência</button>
+    </div>
+  </div>
+
+  <div class="filtros">
+    <div class="campo">
+      <label for="competencia">Competência</label>
+      <input type="month" id="competencia">
+    </div>
+    <div class="campo">
+      <label for="fStatus">Situação</label>
+      <select id="fStatus">
+        <option value="">Todas</option>
+        <option value="pendente">Pendentes</option>
+        <option value="pago">Pagos</option>
+        <option value="cancelado">Cancelados</option>
+      </select>
+    </div>
+    <div class="campo busca">
+      <label for="busca">Buscar</label>
+      <input id="busca" type="search" placeholder="Nome, chave ou identificador">
+    </div>
+  </div>
+
+  <div class="resultado" id="resultado" hidden></div>
+
+  <div class="tabela">
+    <table>
+      <thead><tr><th>Recebedor</th><th>Chave Pix</th><th class="valor">Valor</th><th>Situação</th><th>Gerado em</th><th>Confirmação</th><th></th></tr></thead>
+      <tbody id="linhas"><tr><td colspan="7" class="vazio">Carregando…</td></tr></tbody>
+    </table>
+  </div>
+  <div class="paginacao"><span id="contagem"></span></div>
+</main>
+
+<dialog id="dlgQr">
+  <div class="conteudo">
+    <div class="bloco-topo">
+      <h2 id="qNome"></h2>
+      <span class="sequencia" id="qSeq"></span>
+    </div>
+    <div class="qr-box">
+      <img id="qImg" alt="QR Code do Pix">
+      <div class="valor-grande" id="qValor"></div>
+      <div class="muted" id="qInfo"></div>
+      <div class="copia" id="qPayload"></div>
+      <button type="button" class="secundario pequeno" id="qCopiar">Copiar Pix copia e cola</button>
+    </div>
+    <div class="grade-form" id="qPagarCampos">
+      <div class="campo">
+        <label for="qData">Pago em</label>
+        <input type="datetime-local" id="qData">
+      </div>
+      <div class="campo">
+        <label for="qComprovante">Comprovante / ID (opcional)</label>
+        <input id="qComprovante" maxlength="255" placeholder="ex.: E1234567820261020…">
+      </div>
+    </div>
+    <div class="rodape">
+      <button type="button" class="secundario" id="qFechar">Fechar</button>
+      <button type="button" class="secundario" id="qPular" hidden>Pular</button>
+      <button type="button" id="qPagar">Marcar como pago</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+const { api, brl, esc, dataHora, competenciaNome, rotulo, pill, toast, erro, confirmar, copiar, mostrarResultado } = App;
+let competencia;
+let fila = [];      // modo sequência
+let atual = null;
+let timerBusca;
+
+async function carregar() {
+  const p = new URLSearchParams({ competencia, limite: 1000 });
+  if (fStatus.value) p.set('status', fStatus.value);
+  if (busca.value.trim()) p.set('busca', busca.value.trim());
+  try {
+    const d = await api(`/api/pagamentos?${p}`);
+    contagem.textContent = `${d.total} pagamento${d.total === 1 ? '' : 's'} · ${brl(d.valor)}`;
+    linhas.innerHTML = d.itens.length ? d.itens.map((x) => `
+      <tr>
+        <td><strong>${esc(x.funcionario_nome)}</strong><div class="muted mono">${esc(x.txid)}</div></td>
+        <td class="mono">${esc(x.chave_pix)}</td>
+        <td class="valor">${brl(x.valor)}</td>
+        <td>${pill(x.status)}</td>
+        <td>${dataHora(x.created_at)}</td>
+        <td>${x.status === 'pago' ? `${dataHora(x.pago_em)} <span class="tag">${esc(rotulo(x.confirmacao))}</span>` : ''}</td>
+        <td class="acoes-linha">
+          ${x.status !== 'cancelado' ? `<button type="button" class="link" data-qr="${x.id}">QR</button>` : ''}
+          ${x.status === 'pendente' ? `<button type="button" class="link perigo" data-cancelar="${x.id}">Cancelar</button>` : ''}
+          ${x.status === 'pago' ? `<button type="button" class="link" data-reabrir="${x.id}">Desfazer</button>` : ''}
+        </td>
+      </tr>`).join('') : `<tr><td colspan="7" class="vazio">Nenhum pagamento em ${esc(competenciaNome(competencia))}. Use "Gerar lote" para criar os QR Codes.</td></tr>`;
+  } catch (e) { erro(e); }
+}
+
+function agoraLocal() {
+  const d = new Date();
+  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+  return d.toISOString().slice(0, 16);
+}
+
+async function mostrar(id) {
+  try {
+    atual = await api(`/api/pagamentos/${id}`);
+    qNome.textContent = atual.funcionario_nome;
+    qImg.src = `/api/pagamentos/${id}/qr.png`;
+    qValor.textContent = brl(atual.valor);
+    qInfo.innerHTML = `${esc(competenciaNome(atual.competencia))} · ${pill(atual.status)}`;
+    qPayload.textContent = atual.payload;
+    qData.value = agoraLocal();
+    qComprovante.value = '';
+    const pendente = atual.status === 'pendente';
+    qPagarCampos.hidden = !pendente;
+    qPagar.hidden = !pendente;
+    qPular.hidden = !fila.length;
+    qPagar.textContent = fila.length ? 'Pago, próximo' : 'Marcar como pago';
+    qSeq.textContent = fila.length ? `${fila.indexOf(id) + 1} de ${fila.length}` : '';
+    if (!dlgQr.open) dlgQr.showModal();
+  } catch (e) { erro(e); }
+}
+
+function proximo() {
+  const i = fila.indexOf(atual.id);
+  const seguinte = fila[i + 1];
+  if (seguinte) return mostrar(seguinte);
+  fila = [];
+  dlgQr.close();
+  toast('Fim da sequência.');
+}
+
+qPagar.addEventListener('click', async () => {
+  try {
+    await api(`/api/pagamentos/${atual.id}/pagar`, { json: { pago_em: new Date(qData.value).toISOString(), comprovante: qComprovante.value || undefined } });
+    toast(`${atual.funcionario_nome}: pagamento confirmado.`);
+    carregar();
+    fila.length ? proximo() : dlgQr.close();
+  } catch (e) { erro(e); }
+});
+qPular.addEventListener('click', proximo);
+qFechar.addEventListener('click', () => dlgQr.close());
+dlgQr.addEventListener('close', () => { fila = []; });
+qCopiar.addEventListener('click', () => copiar(qPayload.textContent, qPayload));
+
+btnSequencia.addEventListener('click', async () => {
+  try {
+    const d = await api(`/api/pagamentos?competencia=${competencia}&status=pendente&limite=1000`);
+    if (!d.itens.length) return toast('Nenhum pagamento pendente nesta competência.');
+    fila = d.itens.map((x) => x.id);
+    mostrar(fila[0]);
+  } catch (e) { erro(e); }
+});
+
+btnLote.addEventListener('click', async () => {
+  if (!(await confirmar(`Gerar os QR Codes de ${competenciaNome(competencia)} para todos os funcionários ativos que ainda não têm?`, 'Gerar lote'))) return;
+  try {
+    const r = await api('/api/pagamentos/gerar-lote', { json: { competencia } });
+    const fora = r.ignorados.filter((i) => !/Já tem pagamento/.test(i.motivo));
+    mostrarResultado(resultado, `Lote de ${competenciaNome(competencia)}`,
+      [`${r.criados} QR gerado${r.criados === 1 ? '' : 's'}, total de ${brl(r.total)}`],
+      fora.map((i) => ({ motivo: `${i.nome}: ${i.motivo}` })));
+    carregar();
+  } catch (e) { erro(e); }
+});
+
+linhas.addEventListener('click', async (ev) => {
+  const qr = ev.target.closest('[data-qr]');
+  const can = ev.target.closest('[data-cancelar]');
+  const rea = ev.target.closest('[data-reabrir]');
+  try {
+    if (qr) { fila = []; mostrar(Number(qr.dataset.qr)); }
+    if (can && (await confirmar('Cancelar este pagamento? O QR deixa de valer no sistema, mas quem já tem a imagem ainda consegue pagar pelo banco.', 'Cancelar pagamento', true))) {
+      await api(`/api/pagamentos/${can.dataset.cancelar}/cancelar`, { json: {} });
+      toast('Pagamento cancelado.');
+      carregar();
+    }
+    if (rea && (await confirmar('Desfazer a confirmação? O pagamento volta para pendente e a transação do extrato, se houver, fica sem correspondência.', 'Desfazer'))) {
+      await api(`/api/pagamentos/${rea.dataset.reabrir}/reabrir`, { json: {} });
+      toast('Pagamento voltou para pendente.');
+      carregar();
+    }
+  } catch (e) { erro(e); }
+});
+
+fStatus.addEventListener('change', carregar);
+busca.addEventListener('input', () => { clearTimeout(timerBusca); timerBusca = setTimeout(carregar, 250); });
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const st = new URLSearchParams(location.search).get('status');
+  if (st) fStatus.value = st;
+  competencia = await App.campoCompetencia(document.getElementById('competencia'), (c) => { competencia = c; carregar(); });
+  carregar();
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Comissões · Comissões Pix</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Bricolage+Grotesque:opsz,wght@12..96,600&display=swap">
+<link rel="stylesheet" href="/css/app.css">
+<script src="/js/app.js"></script>
+</head>
+<body>
+<main>
+  <div class="cabecalho">
+    <div>
+      <h1>Comissões variáveis</h1>
+      <p>Valores por competência de quem tem comissão variável. Quem tem comissão fixa usa o valor do cadastro e não precisa de lançamento aqui.</p>
+    </div>
+    <div class="campo">
+      <label for="competencia">Competência</label>
+      <input type="month" id="competencia">
+    </div>
+  </div>
+
+  <section class="colunas" aria-label="Formas de lançar valores">
+    <form class="bloco" id="fManual">
+      <h2>Lançar manualmente</h2>
+      <div class="grade-form">
+        <div class="campo inteira">
+          <label for="mFuncionario">Funcionário</label>
+          <select id="mFuncionario" required></select>
+        </div>
+        <div class="campo">
+          <label for="mValor">Valor (R$)</label>
+          <input id="mValor" inputmode="decimal" placeholder="0,00" required>
+        </div>
+        <div class="campo" style="align-self:end"><button type="submit">Lançar</button></div>
+      </div>
+    </form>
+
+    <form class="bloco" id="fPlanilha">
+      <h2>Importar planilha</h2>
+      <p class="muted" style="margin:0;font-size:.9rem">CSV ou Excel com uma coluna que identifique a pessoa
+        (<span class="mono">documento</span>, <span class="mono">ref_externa</span>, <span class="mono">email</span> ou <span class="mono">funcionario_id</span>)
+        e a coluna <span class="mono">valor</span>. <a href="/modelos/comissoes.csv">Baixar modelo</a></p>
+      <div class="acoes">
+        <input type="file" id="arquivo" accept=".csv,.xlsx,text/csv" required>
+        <button type="submit">Importar</button>
+      </div>
+    </form>
+
+    <div class="bloco">
+      <div class="bloco-topo">
+        <h2>Outro banco de dados</h2>
+        <span id="extStatus"></span>
+      </div>
+      <p class="muted" style="margin:0;font-size:.9rem">Busca os valores da competência com a consulta definida em <span class="mono">EXTERNAL_DB_QUERY</span> no servidor.</p>
+      <div class="acoes"><button type="button" id="sincronizar">Buscar valores</button></div>
+    </div>
+
+    <div class="bloco">
+      <div class="bloco-topo">
+        <h2>Webhook</h2>
+        <span id="whStatus"></span>
+      </div>
+      <p class="muted" style="margin:0;font-size:.9rem">Outro sistema (CRM, ERP, automação) envia os valores com o token de <span class="mono">WEBHOOK_TOKEN</span>:</p>
+      <pre class="copia" id="whExemplo" style="max-height:none;white-space:pre-wrap"></pre>
+    </div>
+  </section>
+
+  <div class="resultado" id="resultado" hidden></div>
+
+  <section class="bloco">
+    <div class="bloco-topo">
+      <h2 id="tLista">Lançamentos</h2>
+      <span class="num" id="total"></span>
+    </div>
+    <div class="tabela">
+      <table>
+        <thead><tr><th>Funcionário</th><th class="valor">Valor</th><th>Origem</th><th>Referência</th><th>Atualizado</th><th>QR</th><th></th></tr></thead>
+        <tbody id="linhas"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const { api, brl, esc, dataHora, competenciaNome, rotulo, pill, toast, erro, confirmar, mostrarResultado } = App;
+let competencia;
+
+async function carregar() {
+  try {
+    const d = await api(`/api/comissoes?competencia=${competencia}`);
+    tLista.textContent = `Lançamentos de ${competenciaNome(competencia)}`;
+    total.textContent = `${d.itens.length} · ${brl(d.total)}`;
+    linhas.innerHTML = d.itens.length ? d.itens.map((c) => `
+      <tr>
+        <td>${esc(c.nome)} ${c.modo_comissao === 'fixa' ? '<span class="tag" title="Valor não será usado: o cadastro é de comissão fixa">Cadastro fixo</span>' : ''} ${c.ativo ? '' : pill('inativo', 'Inativo')}</td>
+        <td class="valor">${brl(c.valor)}</td>
+        <td><span class="tag">${esc(rotulo(c.origem))}</span></td>
+        <td class="muted" style="max-width:220px;overflow-wrap:anywhere">${esc(c.referencia || '')}</td>
+        <td>${dataHora(c.updated_at)}</td>
+        <td>${c.pagamento_id ? pill(c.pagamento_status) : '<span class="muted">Não gerado</span>'}</td>
+        <td class="acoes-linha">${c.pagamento_status === 'pago' ? '' : `<button type="button" class="link perigo" data-excluir="${c.id}">Excluir</button>`}</td>
+      </tr>`).join('') : '<tr><td colspan="7" class="vazio">Nenhum valor lançado para esta competência.</td></tr>';
+  } catch (e) { erro(e); }
+}
+
+function resultadoImportacao(r, titulo) {
+  mostrarResultado(resultado, titulo,
+    [`${r.gravadas} valor${r.gravadas === 1 ? '' : 'es'} gravado${r.gravadas === 1 ? '' : 's'}, total de ${brl(r.total)}`],
+    r.erros, r.avisos);
+  carregar();
+}
+
+async function carregarFuncionarios() {
+  const { itens } = await api('/api/funcionarios?ativo=true&modo=variavel&limite=1000');
+  mFuncionario.innerHTML = itens.length
+    ? '<option value="">Escolha…</option>' + itens.map((f) => `<option value="${f.id}">${esc(f.nome)}</option>`).join('')
+    : '<option value="">Nenhum funcionário com comissão variável</option>';
+}
+
+fManual.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  if (!mFuncionario.value) return toast('Escolha o funcionário.', 'erro');
+  try {
+    const r = await api('/api/comissoes', { json: { competencia, funcionario_id: Number(mFuncionario.value), valor: mValor.value } });
+    if (r.erros.length) return erro(new Error(r.erros[0].motivo));
+    toast('Valor lançado.');
+    mValor.value = '';
+    carregar();
+  } catch (e) { erro(e); }
+});
+
+fPlanilha.addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  if (!arquivo.files[0]) return;
+  const fd = new FormData();
+  fd.append('arquivo', arquivo.files[0]);
+  fd.append('competencia', competencia);
+  try {
+    const r = await api('/api/comissoes/importar', { method: 'POST', body: fd });
+    resultadoImportacao(r, `Planilha ${arquivo.files[0].name}`);
+    fPlanilha.reset();
+  } catch (e) { erro(e); }
+});
+
+sincronizar.addEventListener('click', async () => {
+  sincronizar.disabled = true;
+  try {
+    const r = await api('/api/comissoes/sincronizar-externo', { json: { competencia } });
+    resultadoImportacao(r, `Outro banco: ${r.linhas_lidas} linha${r.linhas_lidas === 1 ? '' : 's'} lida${r.linhas_lidas === 1 ? '' : 's'}`);
+  } catch (e) { erro(e); } finally { sincronizar.disabled = !window.extConfigurado; }
+});
+
+linhas.addEventListener('click', async (ev) => {
+  const b = ev.target.closest('[data-excluir]');
+  if (!b || !(await confirmar('Excluir este lançamento?', 'Excluir', true))) return;
+  try { await api(`/api/comissoes/${b.dataset.excluir}`, { method: 'DELETE' }); toast('Lançamento excluído.'); carregar(); }
+  catch (e) { erro(e); }
+});
+
+function exemploWebhook() {
+  whExemplo.textContent = `curl -X POST ${location.origin}/api/webhooks/comissoes \\
+  -H "Content-Type: application/json" \\
+  -H "X-Api-Key: SEU_TOKEN" \\
+  -d '{"competencia":"${competencia}","itens":[{"ref_externa":"VEND-02","valor":1534.90}]}'`;
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const cfg = await App.config();
+    window.extConfigurado = cfg.banco_externo_configurado;
+    sincronizar.disabled = !cfg.banco_externo_configurado;
+    extStatus.innerHTML = cfg.banco_externo_configurado ? pill('ativo', 'Configurado') : pill('inativo', 'Não configurado');
+    whStatus.innerHTML = cfg.webhook_ativo ? pill('ativo', 'Ativo') : pill('inativo', 'Desativado');
+    competencia = await App.campoCompetencia(document.getElementById('competencia'), (c) => { competencia = c; exemploWebhook(); carregar(); });
+    exemploWebhook();
+    await Promise.all([carregar(), carregarFuncionarios()]);
+  } catch (e) { erro(e); }
+});
+</script>
+</body>
+</html>
